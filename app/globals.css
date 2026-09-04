@@ -1,0 +1,63 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-display: "Space Grotesk", sans-serif;
+  --font-body: "Inter", sans-serif;
+
+  --bg: #FFFFFF;
+  --fg: #000000;
+  --surface: #FFFFFF;
+  --surface-soft: #F7D6D0;
+  --border: rgba(0,0,0,0.08);
+  --muted: rgba(0,0,0,0.55);
+}
+
+.dark {
+  --bg: #000000;
+  --fg: #FFFFFF;
+  --surface: #0A0A0A;
+  --surface-soft: #16110F;
+  --border: rgba(255,255,255,0.10);
+  --muted: rgba(255,255,255,0.6);
+}
+
+* {
+  border-color: var(--border);
+}
+
+html, body {
+  background: var(--bg);
+  color: var(--fg);
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+body {
+  font-family: var(--font-body);
+  -webkit-tap-highlight-color: transparent;
+}
+
+h1, h2, h3, .font-display {
+  font-family: var(--font-display);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Scrollbar hidden for horizontal rails, keep accessible on desktop */
+.rail::-webkit-scrollbar { height: 0; }
+.rail { scrollbar-width: none; }
+
+/* Focus visibility */
+:focus-visible {
+  outline: 2px solid #2F39A9;
+  outline-offset: 2px;
+}
