@@ -35,18 +35,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [unreadCount, setUnreadCount] = useState(0);
 
   const loadProfile = useCallback(async (userId: string) => {
-    try {
-      const p = await fetchProfile(userId);
-      setProfile(p);
-    } catch {
-      setProfile(null);
-    }
-    try {
-      const n = await unreadNotificationCount(userId);
-      setUnreadCount(n);
-    } catch {
-      setUnreadCount(0);
-    }
+    const [profileResult, unreadResult] = await Promise.allSettled([
+      fetchProfile(userId),
+      unreadNotificationCount(userId)
+    ]);
+    setProfile(profileResult.status === "fulfilled" ? profileResult.value : null);
+    setUnreadCount(unreadResult.status === "fulfilled" ? unreadResult.value : 0);
   }, []);
 
   useEffect(() => {

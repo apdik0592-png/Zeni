@@ -3,7 +3,7 @@
 import { Suspense, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/AuthProvider";
-import { uploadMediaFile, createVideo } from "@/lib/api";
+import { uploadMediaFileWithProgress, generateVideoThumbnail, createVideo } from "@/lib/api";
 import type { Visibility } from "@/lib/types";
 
 type Step = "select" | "details" | "publishing" | "success" | "error";
@@ -25,6 +25,8 @@ function UploadFlow() {
   const [hashtags, setHashtags] = useState("");
   const [visibility, setVisibility] = useState<Visibility>("public");
   const [error, setError] = useState("");
+  const [progress, setProgress] = useState(0);
+  const [progressLabel, setProgressLabel] = useState("Preparing…");
   const videoInputRef = useRef<HTMLInputElement>(null);
   const thumbInputRef = useRef<HTMLInputElement>(null);
 
@@ -45,9 +47,36 @@ function UploadFlow() {
     if (!user || !videoFile) return;
     setStep("publishing");
     setError("");
+    setProgress(0);
+    setProgressLabel("Uploading video…");
     try {
-      const videoUrl = await uploadMediaFile(videoFile, user.id, kind === "short" ? "shorts" : "long");
-      const thumbUrl = thumbFile ? await uploadMediaFile(thumbFile, user.id, "thumbnails") : undefined;
+      const videoUrl = await uploadMediaFileWithProgress(
+        videoFile,
+        user.id,
+        kind === "short" ? "shorts" : "long",
+        (pct) => setProgress(Math.round(pct * 0.85)) // video upload = first 85% of the bar
+      );
+
+      let thumbBlobFile: File | null = thumbFile;
+      if (!thumbBlobFile) {
+        setProgressLabel("Generating thumbnail…");
+        try {
+          const blob = await generateVideoThumbnail(videoFile);
+          thumbBlobFile = new File([blob], "thumbnail.jpg", { type: "image/jpeg" });
+        } catch {
+          thumbBlobFile = null; // fine — video will just have no thumbnail
+        }
+      }
+
+      setProgressLabel("Uploading thumbnail…");
+      const thumbUrl = thumbBlobFile
+        ? await uploadMediaFileWithProgress(thumbBlobFile, user.id, "thumbnails", (pct) =>
+            setProgress(85 + Math.round(pct * 0.1)) // thumbnail = next 10%
+          )
+        : undefined;
+
+      setProgress(96);
+      setProgressLabel("Publishing…");
       const tagText = hashtags
         .split(/[\s,]+/)
         .filter(Boolean)
@@ -64,6 +93,7 @@ function UploadFlow() {
         thumbnail_url: thumbUrl,
         visibility
       });
+      setProgress(100);
       setStep("success");
     } catch (e: any) {
       setError(e?.message ?? "Upload failed. Please try again.");
@@ -118,7 +148,7 @@ function UploadFlow() {
         <label className="block text-sm font-medium mb-1.5">Thumbnail (optional)</label>
         <button
           onClick={() => thumbInputRef.current?.click()}
-          className="w-full rounded-xl2 border px-3.5 py-2.5 mb-4 text-sm text-left flex items-center gap-3"
+          className="w-full rounded-xl2 border px-3.5 py-2.5 mb-1.5 text-sm text-left flex items-center gap-3"
         >
           {thumbPreviewUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
@@ -127,6 +157,9 @@ function UploadFlow() {
             <span className="text-[var(--muted)]">Choose an image</span>
           )}
         </button>
+        <p className="text-xs text-[var(--muted)] mb-4">
+          Leave this blank and Zeni will pick a frame from your video automatically.
+        </p>
         <input
           ref={thumbInputRef}
           type="file"
@@ -185,9 +218,15 @@ function UploadFlow() {
   if (step === "publishing") {
     return (
       <div className="max-w-md mx-auto px-4 md:px-6 pt-24 text-center">
-        <span className="w-10 h-10 mx-auto mb-4 rounded-full border-2 border-indigo border-t-transparent animate-spin block" />
-        <p className="font-medium">Publishing your {kind}…</p>
-        <p className="text-sm text-[var(--muted)] mt-1">This can take a moment on slower connections.</p>
+        <p className="font-medium mb-1">{progressLabel}</p>
+        <p className="text-sm text-[var(--muted)] mb-5">Keep this tab open until it finishes.</p>
+        <div className="w-full h-2.5 rounded-pill bg-black/10 dark:bg-white/10 overflow-hidden mb-2">
+          <div
+            className="h-full bg-indigo rounded-pill transition-[width] duration-200 ease-out"
+            style={{ width: `${progress}%` }}
+          />
+        </div>
+        <p className="text-sm font-semibold text-indigo">{progress}%</p>
       </div>
     );
   }

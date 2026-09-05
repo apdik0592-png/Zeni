@@ -8,7 +8,7 @@ import {
   listVideos,
   listFollowingVideos,
   listSuggestedCreators,
-  isFollowing,
+  bulkFollowingSet,
   setFollowing
 } from "@/lib/api";
 import type { Video, Profile } from "@/lib/types";
@@ -41,10 +41,10 @@ export default function HomePage() {
         setLongVideos(l);
         setCreators(c);
 
-        const states = await Promise.all(c.map((creator) => isFollowing(user.id, creator.id)));
+        const followingSet = await bulkFollowingSet(user.id, c.map((creator) => creator.id));
         if (!active) return;
         const map: Record<string, boolean> = {};
-        c.forEach((creator, i) => (map[creator.id] = states[i]));
+        c.forEach((creator) => (map[creator.id] = followingSet.has(creator.id)));
         setFollowState(map);
       } finally {
         if (active) setLoading(false);

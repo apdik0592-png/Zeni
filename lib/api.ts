@@ -141,6 +141,105 @@ export async function uploadMediaFile(file: File, userId: string, folder: string
   return data.publicUrl;
 }
 
+/** Same as uploadMediaFile but reports real 0-100% progress via XHR (used for the upload flow). */
+export function uploadMediaFileWithProgress(
+  file: File,
+  userId: string,
+  folder: string,
+  onProgress?: (pct: number) => void
+): Promise<string> {
+  const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL as string;
+  const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY as string;
+
+  return new Promise((resolve, reject) => {
+    (async () => {
+      try {
+        const { data: sessionData } = await supabase.auth.getSession();
+        const token = sessionData.session?.access_token;
+        if (!token) {
+          reject(new Error("You're signed out — please log in again."));
+          return;
+        }
+        const ext = file.name.split(".").pop() || "bin";
+        const path = `${userId}/${folder}/${crypto.randomUUID()}.${ext}`;
+
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", `${SUPABASE_URL}/storage/v1/object/media/${path}`);
+        xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+        xhr.setRequestHeader("apikey", SUPABASE_ANON_KEY);
+        xhr.setRequestHeader("x-upsert", "false");
+        xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable && onProgress) {
+            onProgress(Math.round((e.loaded / e.total) * 100));
+          }
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            const { data } = supabase.storage.from("media").getPublicUrl(path);
+            onProgress?.(100);
+            resolve(data.publicUrl);
+          } else {
+            reject(new Error(`Upload failed (${xhr.status})`));
+          }
+        };
+        xhr.onerror = () => reject(new Error("Network error during upload."));
+        xhr.send(file);
+      } catch (e) {
+        reject(e);
+      }
+    })();
+  });
+}
+
+/** Captures a frame from a video file to use as an auto-generated thumbnail. */
+export function generateVideoThumbnail(file: File): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement("video");
+    video.preload = "metadata";
+    video.muted = true;
+    video.playsInline = true;
+    const url = URL.createObjectURL(file);
+    video.src = url;
+
+    const cleanup = () => URL.revokeObjectURL(url);
+
+    video.onloadedmetadata = () => {
+      const duration = video.duration || 0;
+      let target = 1;
+      if (duration >= 60) target = 60;
+      else if (duration >= 2) target = 1;
+      else target = Math.max(0, duration - 0.05);
+      video.currentTime = Math.min(target, Math.max(0, duration - 0.05));
+    };
+    video.onseeked = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = video.videoWidth || 720;
+      canvas.height = video.videoHeight || 1280;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        cleanup();
+        reject(new Error("Canvas unavailable"));
+        return;
+      }
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob(
+        (blob) => {
+          cleanup();
+          if (blob) resolve(blob);
+          else reject(new Error("Could not generate thumbnail"));
+        },
+        "image/jpeg",
+        0.85
+      );
+    };
+    video.onerror = () => {
+      cleanup();
+      reject(new Error("Could not read video for thumbnail"));
+    };
+  });
+}
+
 /* ---------------- Likes / Saves / Comments ---------------- */
 
 export async function isLiked(videoId: string, userId: string): Promise<boolean> {
@@ -202,6 +301,64 @@ export async function listSavedVideos(userId: string): Promise<Video[]> {
     .order("created_at", { ascending: false });
   if (error) throw error;
   return ((data ?? []) as unknown as { video: Video }[]).map((r) => r.video).filter(Boolean);
+}
+
+/**
+ * Fetches like/comment counts and the current user's liked/saved sets for a
+ * whole batch of videos in 4 queries total, instead of 4 queries per video.
+ * Used by the Shorts feed to keep the initial load light.
+ */
+export async function bulkVideoStats(videoIds: string[], userId: string) {
+  if (videoIds.length === 0) {
+    return {
+      likeCounts: {} as Record<string, number>,
+      commentCounts: {} as Record<string, number>,
+      likedSet: new Set<string>(),
+      savedSet: new Set<string>()
+    };
+  }
+  const [{ data: allLikes }, { data: allComments }, { data: myLikes }, { data: mySaves }] = await Promise.all([
+    supabase.from("likes").select("video_id").in("video_id", videoIds),
+    supabase.from("comments").select("video_id").in("video_id", videoIds),
+    supabase.from("likes").select("video_id").eq("user_id", userId).in("video_id", videoIds),
+    supabase.from("saves").select("video_id").eq("user_id", userId).in("video_id", videoIds)
+  ]);
+
+  const likeCounts: Record<string, number> = {};
+  for (const row of (allLikes ?? []) as { video_id: string }[]) {
+    likeCounts[row.video_id] = (likeCounts[row.video_id] ?? 0) + 1;
+  }
+  const commentCounts: Record<string, number> = {};
+  for (const row of (allComments ?? []) as { video_id: string }[]) {
+    commentCounts[row.video_id] = (commentCounts[row.video_id] ?? 0) + 1;
+  }
+  const likedSet = new Set((myLikes ?? []).map((r: { video_id: string }) => r.video_id));
+  const savedSet = new Set((mySaves ?? []).map((r: { video_id: string }) => r.video_id));
+
+  return { likeCounts, commentCounts, likedSet, savedSet };
+}
+
+/** Same idea as bulkVideoStats, but for whether the user already follows a batch of creators. */
+export async function bulkFollowingSet(followerId: string, targetIds: string[]): Promise<Set<string>> {
+  if (targetIds.length === 0) return new Set();
+  const { data, error } = await supabase
+    .from("follows")
+    .select("following_id")
+    .eq("follower_id", followerId)
+    .in("following_id", targetIds);
+  if (error) throw error;
+  return new Set((data ?? []).map((r) => r.following_id));
+}
+
+/** Reposting a video to your own profile. Ignores the (video_id,user_id) conflict if already reposted. */
+export async function addRepost(videoId: string, userId: string) {
+  const { error } = await supabase.from("reposts").insert({ video_id: videoId, user_id: userId });
+  if (error && error.code !== "23505") throw error; // 23505 = unique_violation, already reposted
+}
+
+export async function removeRepost(videoId: string, userId: string) {
+  const { error } = await supabase.from("reposts").delete().eq("video_id", videoId).eq("user_id", userId);
+  if (error) throw error;
 }
 
 export async function getCommentCount(videoId: string): Promise<number> {

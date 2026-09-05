@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthProvider";
 import {
   getFollowCounts,
@@ -16,8 +15,7 @@ import type { Video } from "@/lib/types";
 type Tab = "shorts" | "videos" | "saved";
 
 export default function ProfilePage() {
-  const { user, profile, refreshProfile, signOut } = useAuth();
-  const router = useRouter();
+  const { user, profile, refreshProfile } = useAuth();
   const [counts, setCounts] = useState({ followers: 0, following: 0 });
   const [tab, setTab] = useState<Tab>("shorts");
   const [videos, setVideos] = useState<Video[]>([]);
@@ -106,11 +104,6 @@ export default function ProfilePage() {
     }
   };
 
-  const handleSignOut = async () => {
-    await signOut();
-    router.replace("/login");
-  };
-
   if (!profile) {
     return (
       <div className="max-w-3xl mx-auto px-4 md:px-6 pt-10 text-sm text-[var(--muted)]">Loading your profile…</div>
@@ -135,7 +128,12 @@ export default function ProfilePage() {
           </label>
         </div>
         <div className="flex-1">
-          <h1 className="font-display font-bold text-xl">{profile.display_name || profile.username}</h1>
+          <div className="flex items-start justify-between gap-2">
+            <h1 className="font-display font-bold text-xl">{profile.display_name || profile.username}</h1>
+            <Link href="/settings" aria-label="Settings" className="text-lg leading-none shrink-0">
+              ⚙️
+            </Link>
+          </div>
           <p className="text-sm text-[var(--muted)] mb-2">@{profile.username}</p>
           <div className="flex gap-5 text-sm">
             <span>
@@ -211,10 +209,6 @@ export default function ProfilePage() {
           ))}
         </div>
       )}
-
-      <button onClick={handleSignOut} className="mt-10 mb-6 text-sm text-red-600 font-medium">
-        Log out
-      </button>
 
       {editing && (
         <div className="fixed inset-0 z-50 grid place-items-end sm:place-items-center bg-black/40 px-0 sm:px-4">
